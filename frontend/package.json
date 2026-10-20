@@ -8,8 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "type-check": "tsc --noEmit",
-    "test": "tsx --test src/tests/toast.test.ts src/tests/leagueChat.test.tsx src/tests/leaderboard.test.tsx src/tests/dragAndDropSubstitutions.test.ts src/tests/walletModal.test.ts src/tests/adminPayouts.test.tsx",
-    "test": "tsx --test src/tests/toast.test.ts src/tests/leagueChat.test.tsx src/tests/leaderboard.test.tsx src/tests/dragAndDropSubstitutions.test.ts src/tests/walletModal.test.ts src/tests/offlineQueue.test.ts",
+    "test": "tsx --test src/tests/toast.test.ts src/tests/leagueChat.test.tsx src/tests/leaderboard.test.tsx src/tests/dragAndDropSubstitutions.test.ts src/tests/walletModal.test.ts src/tests/offlineQueue.test.ts src/tests/pitchVisualizer.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
