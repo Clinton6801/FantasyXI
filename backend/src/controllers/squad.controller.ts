@@ -8,6 +8,10 @@ import {
   SquadValidationError,
   SquadLockedError,
 } from "../services/squad/squadValidator.js";
+import {
+  withSquadLock,
+  SquadLockConflictError,
+} from "../services/lockManager.js";
 import { scoringService } from "../services/scoring/scoringService.js";
 
 /**
@@ -96,12 +100,14 @@ export async function updateSquad(
     }
 
     const { id } = req.params;
-    // Pass authenticated user ID for ownership verification
-    const squad = await squadService.updateSquad(
-      id as string,
-      req.body,
-      req.user.id
-    );
+    // Pass authenticated user ID for ownership verification under distributed lock
+    const squad = await withSquadLock(id as string, async () => {
+      return await squadService.updateSquad(
+        id as string,
+        req.body,
+        req.user.id
+      );
+    });
 
     res.json({
       success: true,
@@ -109,6 +115,13 @@ export async function updateSquad(
       data: squad,
     });
   } catch (error) {
+    if (error instanceof SquadLockConflictError) {
+      res.status(409).json({
+        success: false,
+        message: error.message,
+      });
+      return;
+    }
     if (error instanceof SquadForbiddenError) {
       res.status(403).json({
         success: false,
