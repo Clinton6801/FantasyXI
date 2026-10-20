@@ -18,6 +18,7 @@ import { Bench } from "@/components/pitch/Bench";
 import { BudgetBar } from "@/components/team/BudgetBar";
 import { PlayerPickerModal } from "@/components/team/PlayerPickerModal";
 import { validateCompleteSquad, detectFormation } from "@/lib/formation";
+import { useSquadSolver } from "@/hooks/useSquadSolver";
 import {
   IconFootball,
   IconCheck,
@@ -57,6 +58,22 @@ export default function TeamPage() {
     activeModalState, setActiveModalState,
     handleSwap, handleSetCaptain, handleSetViceCaptain
   } = useTeamStore();
+
+  const { isSolving, validateSquad: solveSquad } = useSquadSolver();
+  const [solverResult, setSolverResult] = useState<{ valid: boolean; errors: string[] } | null>(null);
+
+  useEffect(() => {
+    const solverPayload = players.map((p) => ({
+      id: p.playerId,
+      position: p.player.position,
+      teamId: p.player.teamId,
+      price: p.player.price,
+      isStarter: p.isStarter,
+    }));
+    solveSquad(solverPayload)
+      .then((res) => setSolverResult(res))
+      .catch(() => {});
+  }, [players, solveSquad]);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);

@@ -1,3 +1,7 @@
+import {
+  broadcastSessionRevocation,
+  useCrossTabSessionSync,
+} from "@/hooks/useCrossTabSessionSync";
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from "react";
@@ -78,10 +82,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (typeof window !== "undefined") {
       localStorage.removeItem("token");
       clearOfflineData();
+      broadcastSessionRevocation({
+        type: "LOGOUT",
+        timestamp: Date.now(),
+      });
     }
     setToken(null);
     setUser(null);
   };
+
+  // Cross-tab & multi-device remote invalidation listener
+  useCrossTabSessionSync({
+    token,
+    onSessionRevoked: () => {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("token");
+        clearOfflineData();
+      }
+      setToken(null);
+      setUser(null);
+    },
+  });
 
   const setAuthToken = async (newToken: string) => {
     if (typeof window !== "undefined") {

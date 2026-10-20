@@ -9,6 +9,8 @@ import {
   executeSettlement,
   reconcileLeague,
   getAffiliateDashboard,
+  getStorageRentStatus,
+  triggerStorageRentRecovery,
 } from "../controllers/financial.controller.js";
 import { requireAuth, requirePermission, requireRole } from "../middleware/authMiddleware.js";
 import { Permission, UserRole } from "../types/index.js";
@@ -47,5 +49,9 @@ router.post("/reconcile-deposit", mutationRateLimiter, requirePermission(Permiss
 // Reconciliation exposes sensitive league financial reports and requires the
 // financial:reconcile permission (ADMIN, MODERATOR and SERVICE roles).
 router.get("/reconcile", requirePermission(Permission.FINANCIAL_RECONCILE), reconcileLeague);
+
+// Soroban contract storage rent & archival recovery (Issue #337)
+router.get("/storage-rent/status", requireRole(UserRole.ADMIN), getStorageRentStatus);
+router.post("/storage-rent/recover", mutationRateLimiter, requireRole(UserRole.ADMIN), triggerStorageRentRecovery);
 
 export default router;

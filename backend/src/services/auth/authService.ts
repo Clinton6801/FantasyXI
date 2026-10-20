@@ -1,3 +1,4 @@
+import { sessionRegistryService } from "./sessionRegistryService.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { prisma as defaultPrisma } from "../../config/db.js";
@@ -183,7 +184,7 @@ export class AuthService {
   /**
    * Registers a new user account with bcrypt hashed password.
    */
-  public async register(input: RegisterInput): Promise<AuthResult> {
+  public async register(input: RegisterInput, context?: AuthRequestContext): Promise<AuthResult> {
     const { normalizedEmail, normalizedUsername } =
       this.validateRegisterInput(input);
 
@@ -245,12 +246,17 @@ export class AuthService {
       }
     }
 
+    const session = await sessionRegistryService.createSession(user.id, {
+      ip: "127.0.0.1",
+      userAgent: null,
+    });
     const safeUser = toSafeUser(user);
     const token = signAccessToken({
       userId: user.id,
       email: user.email,
       username: user.username,
       role: user.role ?? UserRole.USER,
+      sessionId: session.id,
     });
 
     // Best-effort: a signup analytics/notification subscriber failing must
@@ -321,12 +327,17 @@ export class AuthService {
       });
     }
 
+    const session = await sessionRegistryService.createSession(user.id, {
+      ip: "127.0.0.1",
+      userAgent: null,
+    });
     const safeUser = toSafeUser(user);
     const token = signAccessToken({
       userId: user.id,
       email: user.email,
       username: user.username,
       role: user.role ?? UserRole.USER,
+      sessionId: session.id,
     });
 
     return {
@@ -437,12 +448,17 @@ export class AuthService {
       }
     }
 
+    const session = await sessionRegistryService.createSession(user.id, {
+      ip: "127.0.0.1",
+      userAgent: null,
+    });
     const safeUser = toSafeUser(user);
     const token = signAccessToken({
       userId: user.id,
       email: user.email,
       username: user.username,
       role: user.role ?? UserRole.USER,
+      sessionId: session.id,
     });
 
     return {

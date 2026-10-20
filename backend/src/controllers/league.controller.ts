@@ -538,3 +538,70 @@ export async function streamLeagueLive(
     next(error);
   }
 }
+
+import { SwissTournamentService } from "../services/league/swissTournamentService.js";
+
+export async function initSwissTournament(req: Request, res: Response): Promise<void> {
+  try {
+    const leagueId = req.params.leagueId as string;
+    const { participants, totalRounds } = req.body;
+    const tournament = SwissTournamentService.createTournament(
+      leagueId,
+      participants,
+      totalRounds
+    );
+    res.status(201).json({ success: true, data: tournament });
+  } catch (error) {
+    res.status(400).json({ success: false, message: (error as Error).message });
+  }
+}
+
+export async function getSwissStandings(req: Request, res: Response): Promise<void> {
+  try {
+    const leagueId = req.params.leagueId as string;
+    const standings = SwissTournamentService.getStandings(leagueId);
+    res.json({ success: true, data: standings });
+  } catch (error) {
+    res.status(404).json({ success: false, message: (error as Error).message });
+  }
+}
+
+export async function getSwissCurrentRound(req: Request, res: Response): Promise<void> {
+  try {
+    const leagueId = req.params.leagueId as string;
+    const round = SwissTournamentService.getCurrentRound(leagueId);
+    res.json({ success: true, data: round });
+  } catch (error) {
+    res.status(404).json({ success: false, message: (error as Error).message });
+  }
+}
+
+export async function advanceSwissRound(req: Request, res: Response): Promise<void> {
+  try {
+    const leagueId = req.params.leagueId as string;
+    const { gameweekId } = req.body;
+    const round = SwissTournamentService.startOrAdvanceRound(
+      leagueId,
+      Number(gameweekId || 1)
+    );
+    res.json({ success: true, data: round });
+  } catch (error) {
+    res.status(400).json({ success: false, message: (error as Error).message });
+  }
+}
+
+export async function resolveSwissRound(req: Request, res: Response): Promise<void> {
+  try {
+    const leagueId = req.params.leagueId as string;
+    const round = req.params.round as string;
+    const { results } = req.body;
+    const state = SwissTournamentService.submitRoundResults(
+      leagueId,
+      Number(round),
+      results
+    );
+    res.json({ success: true, data: state });
+  } catch (error) {
+    res.status(400).json({ success: false, message: (error as Error).message });
+  }
+}

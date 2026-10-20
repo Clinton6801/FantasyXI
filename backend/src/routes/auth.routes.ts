@@ -10,6 +10,10 @@ import {
   unlinkGoogleAccount,
   setPassword,
   getUserReferralCode,
+  listActiveSessions,
+  revokeSession,
+  revokeOtherSessions,
+  streamSessionEvents,
 } from "../controllers/auth.controller.js";
 import { requireAuth, requirePermission } from "../middleware/authMiddleware.js";
 import { Permission } from "../types/index.js";
@@ -55,6 +59,12 @@ router.delete("/google/link", requireAuth, unlinkGoogleAccount);
 
 // POST /api/v1/auth/password (Protected: add a password to a Google account, or change it)
 router.post("/password", authRateLimiter, requireAuth, setPassword);
+
+// Active session management & device fingerprinting (Issue #342)
+router.get("/sessions", requireAuth, authenticatedRateLimiter, listActiveSessions);
+router.delete("/sessions/:sessionId", requireAuth, authenticatedRateLimiter, revokeSession);
+router.post("/sessions/revoke-others", requireAuth, authenticatedRateLimiter, revokeOtherSessions);
+router.get("/sessions/events", requireAuth, streamSessionEvents);
 
 export default router;
 
