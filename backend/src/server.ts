@@ -19,6 +19,7 @@ import { preferReplicaReads } from "./middleware/readConsistency.js";
 import { financialAuditLog } from "./services/audit/financialAuditLog.js";
 import { resolvers } from "./graphql/resolvers.js";
 import { typeDefs } from "./graphql/schema.js";
+import { createComplexityPlugin } from "./graphql/complexityPlugin.js";
 import { attachChatSocketServer } from "./realtime/chatSocketServer.js";
 import {
   attachNotificationSocketServer,
@@ -33,7 +34,11 @@ import { jwtKeyRotationService } from "./services/auth/jwtKeyRotationService.js"
 
 dotenv.config();
 
-const apolloServer = new ApolloServer({ typeDefs, resolvers });
+const apolloServer = new ApolloServer({
+  typeDefs,
+  resolvers,
+  plugins: [createComplexityPlugin(getRedisClient())],
+});
 
 // Trust reverse proxies (Cloudflare, Nginx, ALB) for accurate client IP rate limiting
 app.set("trust proxy", 1);
