@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   register,
   login,
+  verifyLoginChallenge,
   getMe,
   initiateGoogleAuth,
   handleGoogleCallback,
@@ -10,6 +11,7 @@ import {
   unlinkGoogleAccount,
   setPassword,
   getUserReferralCode,
+  revokeSigningKey,
 } from "../controllers/auth.controller.js";
 import { requireAuth, requirePermission } from "../middleware/authMiddleware.js";
 import { Permission } from "../types/index.js";
@@ -25,6 +27,9 @@ router.post("/register", authRateLimiter, register);
 
 // POST /api/v1/auth/login
 router.post("/login", authRateLimiter, login);
+
+// POST /api/v1/auth/login/verify (step-up code for a login from a new device)
+router.post("/login/verify", authRateLimiter, verifyLoginChallenge);
 
 // GET /api/v1/auth/me (Protected)
 router.get("/me", requireAuth, authenticatedRateLimiter, requirePermission(Permission.PROFILE_READ), getMe);
@@ -55,6 +60,9 @@ router.delete("/google/link", requireAuth, unlinkGoogleAccount);
 
 // POST /api/v1/auth/password (Protected: add a password to a Google account, or change it)
 router.post("/password", authRateLimiter, requireAuth, setPassword);
+
+// POST /api/v1/auth/keys/:kid/revoke (ADMIN or service key: revokes a JWT signing key on every node)
+router.post("/keys/:kid/revoke", requireAuth, requirePermission(Permission.AUTH_KEYS_MANAGE), revokeSigningKey);
 
 export default router;
 

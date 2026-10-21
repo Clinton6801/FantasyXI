@@ -5,6 +5,8 @@ import { signAccessToken } from "../../config/jwt.js";
 import {
   RegisterInput,
   LoginInput,
+  LoginChallengeInput,
+  LoginResult,
   SafeUser,
   AuthResult,
   UserRole,
@@ -18,11 +20,14 @@ import {
   loginSecurityService as defaultLoginSecurityService,
   LoginSecurityService,
 } from "../security/loginSecurityService.js";
+import type { GeoPoint } from "../security/geoVelocity.js";
 
-/** Request-derived context used for anomalous-login detection (issue #117). */
+/** Request-derived context used for anomalous-login detection (issues #117, #331). */
 export interface AuthRequestContext {
   ip: string;
   userAgent?: string | null;
+  /** IP-derived location from trusted edge headers, when configured */
+  location?: GeoPoint | null;
 }
 
 /**
@@ -49,6 +54,16 @@ export class AuthUnauthorizedError extends Error {
   constructor(message: string = "Invalid email or password") {
     super(message);
     this.name = "AuthUnauthorizedError";
+  }
+}
+
+/** A correct password was refused because the login looks like account takeover (issue #331). */
+export class AuthLoginBlockedError extends Error {
+  constructor(
+    message: string = "This sign-in was blocked because it came from an implausibly distant location. Check your email for details."
+  ) {
+    super(message);
+    this.name = "AuthLoginBlockedError";
   }
 }
 
@@ -272,14 +287,17 @@ export class AuthService {
    * Authenticates user with email and password.
    * Returns generic 401 message on any credential mismatch to prevent enumeration.
    *
-   * `context` (client IP / user agent) is optional so existing callers and
-   * tests that don't have request metadata keep working unchanged; when
-   * provided, it drives the anomalous-login detection in issue #117: failed
-   * attempts are tracked per email for spike detection, and a successful
-   * login from a device/IP not seen before for this user triggers an email
-   * alert (see services/security/loginSecurityService.ts).
+   * `context` (client IP / user agent / location) is optional so existing
+   * callers and tests that don't have request metadata keep working
+   * unchanged; when provided, it drives the login security checks (see
+   * services/security/loginSecurityService.ts): failed attempts are tracked
+   * per email for spike detection (#117), an impossible-travel login is
+   * refused with AuthLoginBlockedError, and a login from an unrecognized
+   * device returns a step-up challenge instead of a token (#331).
    */
-  public async login(input: LoginInput, context?: AuthRequestContext): Promise<AuthResult> {
+  public async login(input: LoginInput): Promise<AuthResult>;
+  public async login(input: LoginInput, context: AuthRequestContext | undefined): Promise<LoginResult>;
+  public async login(input: LoginInput, context?: AuthRequestContext): Promise<LoginResult> {
     if (!input.email || !input.password) {
       throw new AuthUnauthorizedError("Invalid email or password");
     }
@@ -312,26 +330,66 @@ export class AuthService {
     }
 
     if (context) {
-      await this.security.handleSuccessfulLogin({
+      const assessment = await this.security.assessLogin({
         userId: user.id,
         email: user.email,
         username: user.username,
         ip: context.ip,
         userAgent: context.userAgent,
+        deviceFingerprint: typeof input.deviceFingerprint === "string" ? input.deviceFingerprint : null,
+        location: context.location,
       });
+      if (assessment.decision === "BLOCK") {
+        throw new AuthLoginBlockedError();
+      }
+      if (assessment.decision === "CHALLENGE") {
+        return {
+          challengeRequired: true,
+          challengeId: assessment.challengeId,
+          method: "EMAIL_OTP",
+          expiresAt: assessment.expiresAt.toISOString(),
+        };
+      }
     }
 
-    const safeUser = toSafeUser(user);
-    const token = signAccessToken({
-      userId: user.id,
-      email: user.email,
-      username: user.username,
-      role: user.role ?? UserRole.USER,
-    });
+    return this.issueAuthResult(user);
+  }
 
+  /**
+   * Completes a login that was answered with a step-up challenge: a valid
+   * code issues the token and remembers the device for future logins.
+   */
+  public async verifyLoginChallenge(input: LoginChallengeInput): Promise<AuthResult> {
+    if (typeof input.challengeId !== "string" || typeof input.code !== "string" || !/^\d{6}$/.test(input.code)) {
+      throw new AuthValidationError("A challengeId and a 6-digit code are required");
+    }
+
+    const verification = await this.security.verifyChallenge(input.challengeId, input.code);
+    if (!verification.verified) {
+      throw new AuthUnauthorizedError(
+        verification.attemptsRemaining > 0
+          ? `Incorrect verification code. ${verification.attemptsRemaining} attempt(s) remaining.`
+          : "This verification code has expired or been used up. Please sign in again."
+      );
+    }
+
+    const user = await this.db.user.findUnique({ where: { id: verification.userId } });
+    if (!user) {
+      throw new AuthNotFoundError("User not found");
+    }
+    return this.issueAuthResult(user);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private issueAuthResult(user: any): AuthResult {
     return {
-      user: safeUser,
-      token,
+      user: toSafeUser(user),
+      token: signAccessToken({
+        userId: user.id,
+        email: user.email,
+        username: user.username,
+        role: user.role ?? UserRole.USER,
+      }),
     };
   }
 

@@ -135,6 +135,14 @@ export type RegisterRequest = RegisterInput;
 export interface LoginInput {
   email: string;
   password: string;
+  /** Browser entropy fingerprint used for device recognition (issue #331); optional for API clients */
+  deviceFingerprint?: string;
+}
+
+/** POST /api/v1/auth/login/verify input: the step-up code emailed to the account owner */
+export interface LoginChallengeInput {
+  challengeId: string;
+  code: string;
 }
 
 /** Backwards-compatible alias */
@@ -145,6 +153,16 @@ export interface AuthResult {
   user: SafeUser;
   token: string;
 }
+
+/** Returned instead of a token when a login from a new device must be verified (issue #331) */
+export interface LoginChallenge {
+  challengeRequired: true;
+  challengeId: string;
+  method: "EMAIL_OTP";
+  expiresAt: string;
+}
+
+export type LoginResult = AuthResult | LoginChallenge;
 
 /** Standard auth API response wrapper */
 export interface AuthResponse {

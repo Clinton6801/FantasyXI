@@ -6,6 +6,7 @@ import { settleCompletedGameweeks } from "../jobs/gameweekSettlement.js";
 import { processLeagueRefunds } from "../jobs/leagueRefunds.js";
 import { runLedgerReconciliationJob } from "../jobs/ledgerReconciliation.js";
 import { applyRetroactiveBpsAdjustments } from "../jobs/retroactiveBpsAdjustments.js";
+import { jwtKeyRotationService } from "../services/auth/jwtKeyRotationService.js";
 import {
   executeFplSyncTask,
   FPL_SYNC_DLQ_NAME,
@@ -61,6 +62,8 @@ export const JOB_DEFINITIONS: JobDefinition[] = [
   },
   { name: "ledger-reconciliation", cron: "30 2 * * *", handler: () => runLedgerReconciliationJob() },
   { name: "retroactive-bps", cron: "*/30 * * * *", handler: () => applyRetroactiveBpsAdjustments() },
+  // Pre-publishes the next JWT signing key when due and prunes retired keys (issue #332)
+  { name: "jwt-key-rotation", cron: "*/15 * * * *", handler: () => jwtKeyRotationService.rotate() },
 ];
 
 const QUEUE_OPTIONS = {

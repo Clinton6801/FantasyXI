@@ -975,3 +975,23 @@ model ScoreAdjustmentLog {
   @@index([runId])
   @@map("score_adjustment_logs")
 }
+
+/// Asymmetric access-token signing key (issue #332). A key signs from
+/// activatesAt until a successor activates, then only verifies until retiresAt.
+model JwtSigningKey {
+  /// Key ID carried in the JWT `kid` header
+  kid                 String    @id
+  algorithm           String
+  /// Public key as a JWK (RFC 7517), served from /.well-known/jwks.json
+  publicJwk           Json      @map("public_jwk")
+  /// PKCS#8 private key, AES-256-GCM encrypted with a key derived from JWT_SECRET
+  encryptedPrivateKey String    @map("encrypted_private_key")
+  activatesAt         DateTime  @map("activates_at")
+  retiresAt           DateTime? @map("retires_at")
+  revokedAt           DateTime? @map("revoked_at")
+  revokedReason       String?   @map("revoked_reason")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  @@index([revokedAt, retiresAt])
+  @@map("jwt_signing_keys")
+}

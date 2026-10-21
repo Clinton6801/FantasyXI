@@ -5,8 +5,11 @@ import {
   AuthConflictError,
   AuthUnauthorizedError,
   AuthNotFoundError,
+  AuthLoginBlockedError,
 } from "../services/auth/authService.js";
+import { locateFromHeaders } from "../services/security/geoVelocity.js";
 import { ReferralService } from "../services/auth/referralService.js";
+import { jwtKeyRotationService } from "../services/auth/jwtKeyRotationService.js";
 
 /**
  * Authentication Controller.
@@ -54,18 +57,35 @@ export async function login(
   next: NextFunction
 ): Promise<void> {
   try {
-    // Client IP/user agent drive anomalous-login detection (issue #117):
-    // failed-login spike tracking and new-device/new-IP email alerts.
+    // Client IP/user agent/location drive login security (issues #117, #331):
+    // failed-login spikes, impossible-travel blocking and new-device step-up.
     const result = await authService.login(req.body, {
       ip: req.ip ?? req.socket.remoteAddress ?? "unknown",
       userAgent: req.headers["user-agent"] ?? null,
+      location: locateFromHeaders(req.headers),
     });
+    if ("challengeRequired" in result) {
+      // 202: credentials accepted, but the session is only issued after verification
+      res.status(202).json({
+        success: true,
+        message: "We emailed you a verification code to confirm this new device.",
+        data: result,
+      });
+      return;
+    }
     res.json({
       success: true,
       message: "Logged in successfully",
       data: result,
     });
   } catch (error) {
+    if (error instanceof AuthLoginBlockedError) {
+      res.status(403).json({
+        success: false,
+        message: error.message,
+      });
+      return;
+    }
     if (error instanceof AuthUnauthorizedError) {
       res.status(401).json({
         success: false,
@@ -78,6 +98,32 @@ export async function login(
         success: false,
         message: error.message,
       });
+      return;
+    }
+    next(error);
+  }
+}
+
+/** POST /api/v1/auth/login/verify (issue #331): completes a login challenged for a new device. */
+export async function verifyLoginChallenge(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const result = await authService.verifyLoginChallenge(req.body ?? {});
+    res.json({
+      success: true,
+      message: "Logged in successfully",
+      data: result,
+    });
+  } catch (error) {
+    if (error instanceof AuthValidationError) {
+      res.status(400).json({ success: false, message: error.message });
+      return;
+    }
+    if (error instanceof AuthUnauthorizedError) {
+      res.status(401).json({ success: false, message: error.message });
       return;
     }
     next(error);
@@ -440,5 +486,37 @@ export async function getUserReferralCode(
   }
 }
 
+/**
+ * GET /.well-known/jwks.json (issue #332)
+ * Public JWK Set of the keys that sign access tokens. Short cache lifetime so
+ * external verifiers pick up a pre-published successor before it activates.
+ */
+export function getJwks(_req: Request, res: Response): void {
+  res.set("Cache-Control", "public, max-age=300");
+  res.json(jwtKeyRotationService.getJwks());
+}
 
-
+/**
+ * POST /api/v1/auth/keys/:kid/revoke (issue #332)
+ * Revokes a compromised signing key on every node. Body: { reason? }.
+ */
+export async function revokeSigningKey(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const reason =
+      typeof req.body?.reason === "string" && req.body.reason.trim()
+        ? req.body.reason.trim().slice(0, 200)
+        : `revoked by ${req.user?.id ?? "unknown"}`;
+    const result = await jwtKeyRotationService.revoke(String(req.params.kid), reason);
+    if (!result) {
+      res.status(404).json({ success: false, message: "Signing key not found" });
+      return;
+    }
+    res.json({ success: true, message: "Signing key revoked", data: result });
+  } catch (error) {
+    next(error);
+  }
+}
