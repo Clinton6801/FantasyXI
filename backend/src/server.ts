@@ -14,7 +14,7 @@ import { ApolloServer } from "@apollo/server";
 import { expressMiddleware } from "@as-integrations/express5";
 import DataLoader from "dataloader";
 import { prisma, getReadReplicaStatus } from "./config/db.js";
-import { closeRedisClient } from "./config/redis.js";
+import { closeRedisClient, getRedisClient } from "./config/redis.js";
 import { preferReplicaReads } from "./middleware/readConsistency.js";
 import { financialAuditLog } from "./services/audit/financialAuditLog.js";
 import { resolvers } from "./graphql/resolvers.js";
@@ -29,6 +29,8 @@ import {
   CoordinatedTransactionStatus,
 } from "./services/financial/transactionCoordinatorService.js";
 import { financialService } from "./services/financial/financialService.js";
+import { jwtKeyRotationService } from "./services/auth/jwtKeyRotationService.js";
+import { fplClient } from "./services/fpl/fplClient.js";
 
 dotenv.config();
 
@@ -103,6 +105,20 @@ app.get(
         appRegion: process.env.APP_REGION ?? null,
         replicas,
       },
+      timestamp: new Date().toISOString(),
+    });
+  }
+);
+
+// FPL upstream circuit breaker and cache-tier metrics (issue #275), like queue health
+app.get(
+  "/api/health/fpl",
+  requireAuth,
+  requirePermission(Permission.SYSTEM_HEALTH_READ),
+  (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      data: { degraded: fplClient.isDegraded(), ...fplClient.getTelemetry() },
       timestamp: new Date().toISOString(),
     });
   }
@@ -208,6 +224,7 @@ process.on("SIGTERM", () => {
   // Persist buffered financial audit entries before exiting
   stopJobQueue()
     .finally(() => transactionCoordinator.stop())
+    .finally(() => jwtKeyRotationService.stop())
     .finally(() => chatSocketServer?.close())
     .finally(() => notificationSocketServer?.close())
     .finally(() => financialAuditLog.close())
