@@ -394,6 +394,12 @@ export async function getAffiliateDashboard(
   }
 }
 
+
+import { SorobanStateArchivalRecoveryService } from "../services/financial/sorobanStateArchivalRecovery.js";
+
+const storageRecoveryService = new SorobanStateArchivalRecoveryService();
+
+export async function getStorageRentStatus(
 import { disputeService } from "../services/financial/disputeService.js";
 import { createSettlementMerkleTree } from "../services/financial/settlementProof.js";
 
@@ -437,6 +443,28 @@ export async function getLeagueDisputesHandler(
   next: NextFunction
 ): Promise<void> {
   try {
+    const contractIds = req.query.contractId
+      ? [req.query.contractId as string]
+      : [];
+    const inspection = await storageRecoveryService.inspectContractEntries(contractIds);
+    const rentReserves = await storageRecoveryService.inspectRentReserves(
+      contractIds.length > 0
+        ? contractIds
+        : [process.env.STELLAR_ESCROW_CONTRACT_ID || ""]
+    );
+    res.json({
+      success: true,
+      data: {
+        currentLedger: inspection.currentLedger,
+        entries: inspection.entries,
+        rentReserves,
+        thresholds: {
+          warnThresholdLedgers: storageRecoveryService.warnThresholdLedgers,
+          restoreThresholdLedgers: storageRecoveryService.restoreThresholdLedgers,
+          extendTtlLedgers: storageRecoveryService.extendTtlLedgers,
+          minSafeBalanceStroops: storageRecoveryService.minSafeBalanceStroops.toString(),
+        },
+      },
     const leagueId = (req.params.leagueId || req.params.id) as string;
     const disputes = await disputeService.getDisputesForLeague(leagueId);
 
@@ -514,12 +542,30 @@ export async function resolveDisputePayoutHandler(
   }
 }
 
+export async function triggerStorageRentRecovery(
 export async function resolveDisputeRefundHandler(
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   try {
+    const adminSecret =
+      process.env.STELLAR_ADMIN_SECRET || (req.body.adminSecret as string);
+    if (!adminSecret) {
+      res.status(400).json({
+        success: false,
+        message: "No admin signing secret available to execute state recovery.",
+      });
+      return;
+    }
+    const contractIds = req.body.contractIds || [];
+    const report = await storageRecoveryService.runRecoveryCycle(
+      adminSecret,
+      contractIds
+    );
+    res.json({
+      success: true,
+      data: report,
     const { disputeId } = req.params;
     const { participants, notes } = req.body;
 

@@ -608,6 +608,11 @@ export function getJwks(_req: Request, res: Response): void {
   res.json(jwtKeyRotationService.getJwks());
 }
 
+
+
+import { sessionRegistryService } from "../services/auth/sessionRegistryService.js";
+
+export async function listActiveSessions(
 /**
  * POST /api/v1/auth/keys/:kid/revoke (issue #332)
  * Revokes a compromised signing key on every node. Body: { reason? }.
@@ -618,6 +623,111 @@ export async function revokeSigningKey(
   next: NextFunction
 ): Promise<void> {
   try {
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const sessions = await sessionRegistryService.listUserSessions(userId);
+    res.json({
+      success: true,
+      data: {
+        currentSessionId: req.sessionId || null,
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          device: s.device,
+          createdAt: s.createdAt,
+          lastActiveAt: s.lastActiveAt,
+          isCurrent: s.id === req.sessionId,
+        })),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function revokeSession(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const sessionId = req.params.sessionId as string;
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const targetSession = await sessionRegistryService.getSession(sessionId);
+    if (!targetSession || targetSession.userId !== userId) {
+      res.status(404).json({ success: false, message: "Session not found" });
+      return;
+    }
+    await sessionRegistryService.revokeSession(sessionId, "Manually revoked by user");
+    res.json({ success: true, message: "Session revoked successfully" });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function revokeOtherSessions(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const currentSessionId = req.sessionId;
+    const revokedCount = await sessionRegistryService.revokeAllUserSessions(
+      userId,
+      currentSessionId,
+      "Logged out other devices"
+    );
+    res.json({
+      success: true,
+      message: `Revoked ${revokedCount} other active sessions.`,
+      revokedCount,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function streamSessionEvents(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    res.write(`event: connected\ndata: ${JSON.stringify({ sessionId: req.sessionId })}\n\n`);
+
+    const unsubscribe = sessionRegistryService.onRevocation((event) => {
+      if (event.userId === userId) {
+        res.write(`event: session_revoked\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+    });
+
+    req.on("close", () => {
+      unsubscribe();
+    });
     const reason =
       typeof req.body?.reason === "string" && req.body.reason.trim()
         ? req.body.reason.trim().slice(0, 200)
