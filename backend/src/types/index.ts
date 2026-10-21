@@ -8,6 +8,8 @@
  * API Resource shapes combined.
  */
 
+import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/server";
+
 // ============================================================
 // Enums — must match the Prisma schema exactly
 // ============================================================
@@ -162,7 +164,16 @@ export interface LoginChallenge {
   expiresAt: string;
 }
 
-export type LoginResult = AuthResult | LoginChallenge;
+/** Returned instead of a token when a password login must be confirmed with one of the account's passkeys (issue #273) */
+export interface PasskeyLoginChallenge {
+  challengeRequired: true;
+  method: "WEBAUTHN";
+  /** Options for navigator.credentials.get(), limited to the account's passkeys */
+  options: PublicKeyCredentialRequestOptionsJSON;
+  expiresAt: string;
+}
+
+export type LoginResult = AuthResult | LoginChallenge | PasskeyLoginChallenge;
 
 /** Standard auth API response wrapper */
 export interface AuthResponse {

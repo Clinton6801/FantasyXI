@@ -18,6 +18,10 @@ export enum SecurityAnomalyType {
   /** Successive logins further apart than any traveller could cover (issue #331) */
   IMPOSSIBLE_TRAVEL = "IMPOSSIBLE_TRAVEL",
   SECURITY_TAMPER_DETECTED = "SECURITY_TAMPER_DETECTED",
+  /** Passkey assertion whose signature counter did not advance: possible cloned authenticator (issue #273) */
+  WEBAUTHN_COUNTER_REGRESSION = "WEBAUTHN_COUNTER_REGRESSION",
+  /** Account linked to a suspected multi-account (Sybil) cluster in a paid league (issue #274) */
+  SYBIL_CLUSTER_SUSPECTED = "SYBIL_CLUSTER_SUSPECTED",
 }
 
 export interface SecurityAnomalyInput {

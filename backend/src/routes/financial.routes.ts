@@ -9,6 +9,8 @@ import {
   executeSettlement,
   reconcileLeague,
   getAffiliateDashboard,
+  getStorageRentStatus,
+  triggerStorageRentRecovery,
   fileDisputeHandler,
   getLeagueDisputesHandler,
   addEvidenceHandler,
@@ -59,6 +61,9 @@ router.post("/refund-claim", mutationRateLimiter, requirePermission(Permission.P
 // financial:reconcile permission (ADMIN, MODERATOR and SERVICE roles).
 router.get("/reconcile", requirePermission(Permission.FINANCIAL_RECONCILE), reconcileLeague);
 
+// Soroban contract storage rent & archival recovery (Issue #337)
+router.get("/storage-rent/status", requireRole(UserRole.ADMIN), getStorageRentStatus);
+router.post("/storage-rent/recover", mutationRateLimiter, requireRole(UserRole.ADMIN), triggerStorageRentRecovery);
 // Merkle tree settlement
 router.post("/merkle-settle", requireRole(UserRole.ADMIN), executeMerkleSettlementHandler);
 

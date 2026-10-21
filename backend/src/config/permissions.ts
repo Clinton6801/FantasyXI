@@ -64,6 +64,9 @@ export enum Permission {
   PAYOUT_READ = "payout:read",
   PAYOUT_MANAGE = "payout:manage",
   FINANCIAL_AUDIT_READ = "financial:audit:read",
+
+  /** Sybil-ring investigations (issue #274): exposes members' wallets and networks */
+  SECURITY_REVIEW = "security:review",
 }
 
 /** Everything a signed-in manager can do with their own data. */
@@ -104,6 +107,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, ReadonlySet<Permission>>> =
     Permission.PAYOUT_MANAGE,
     Permission.FINANCIAL_AUDIT_READ,
     Permission.AUTH_KEYS_MANAGE,
+    Permission.SECURITY_REVIEW,
   ]),
   // Automated callers act on platform data, never as a manager
   [Role.SERVICE]: new Set([

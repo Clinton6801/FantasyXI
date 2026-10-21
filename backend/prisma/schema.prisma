@@ -174,6 +174,8 @@ model User {
   depositRefundClaims DepositRefundClaim[]
   matchmakingQueueEntry MatchmakingQueueEntry? @relation("MatchmakingQueueOwner")
   matchedQueueEntries  MatchmakingQueueEntry[] @relation("MatchmakingMatchedUser")
+  webAuthnCredentials  WebAuthnCredential[]
+  accountSignals       AccountSignal[]
 
   @@map("users")
 }
@@ -994,4 +996,73 @@ model JwtSigningKey {
 
   @@index([revokedAt, retiresAt])
   @@map("jwt_signing_keys")
+}
+
+/// FIDO2 / WebAuthn passkey registered to an account (issue #273)
+model WebAuthnCredential {
+  /// Credential ID (base64url), as returned by the authenticator
+  id         String    @id
+  userId     String    @map("user_id")
+  /// COSE-encoded credential public key
+  publicKey  Bytes     @map("public_key")
+  /// Signature counter (W3C WebAuthn §6.1.1), an unsigned 32-bit value
+  counter    BigInt    @default(0)
+  transports String[]  @default([])
+  /// singleDevice | multiDevice (synced passkey)
+  deviceType String    @map("device_type")
+  backedUp   Boolean   @map("backed_up")
+  aaguid     String
+  name       String
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastUsedAt DateTime? @map("last_used_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("webauthn_credentials")
+}
+
+/// Login signature kinds linking accounts in the Sybil graph (issue #274)
+enum AccountSignalType {
+  /// SHA-256 device ID (loginSecurityService.deriveDeviceId)
+  DEVICE
+  /// Client network: IPv4 /24 or IPv6 /64, in CIDR notation
+  IP_SUBNET
+}
+
+/// Login signatures observed per account. The (type, value) prefix of the
+/// primary key is the inverted index "signal -> accounts" (issue #274).
+model AccountSignal {
+  type        AccountSignalType
+  value       String
+  userId      String            @map("user_id")
+  firstSeenAt DateTime          @default(now()) @map("first_seen_at")
+  lastSeenAt  DateTime          @default(now()) @map("last_seen_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([type, value, userId])
+  @@index([userId])
+  @@map("account_signals")
+}
+
+/// Account that created (funded) a Stellar address, resolved once from
+/// Horizon's create_account operation; immutable on-chain (issue #274)
+model StellarAccountFunder {
+  address    String   @id
+  funder     String
+  resolvedAt DateTime @default(now()) @map("resolved_at")
+
+  @@index([funder])
+  @@map("stellar_account_funders")
+}
+
+/// Last good payload per FPL endpoint: the L3 fallback served while the FPL
+/// API is unavailable and the cache tiers are empty (issue #275)
+model FplApiSnapshot {
+  endpoint  String   @id
+  payload   Json
+  fetchedAt DateTime @map("fetched_at")
+
+  @@map("fpl_api_snapshots")
 }

@@ -101,7 +101,7 @@ const LAST_LOGIN_PREFIX = "security:last-login:";
 const CHALLENGE_PREFIX = "security:challenge:";
 const MAX_KNOWN_DEVICES = 50;
 const MAX_CHALLENGE_ATTEMPTS = 5;
-const FINGERPRINT_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+export const FINGERPRINT_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 
 /** SHA-256 of the client fingerprint and user agent; only this digest is stored. */
 export function deriveDeviceId(fingerprint: string | null | undefined, userAgent: string | null | undefined): string {
