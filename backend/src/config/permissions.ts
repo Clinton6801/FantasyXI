@@ -57,6 +57,8 @@ export enum Permission {
   SCORE_CALCULATE = "score:calculate",
   FINANCIAL_RECONCILE = "financial:reconcile",
   SYSTEM_HEALTH_READ = "system:health:read",
+  /** Revoke JWT signing keys (issue #332); SERVICE lets a secret scanner revoke leaked keys */
+  AUTH_KEYS_MANAGE = "auth:keys:manage",
 
   // Payout dead-letter queue and financial audit log
   PAYOUT_READ = "payout:read",
@@ -101,6 +103,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, ReadonlySet<Permission>>> =
     // Moving or writing off funds and reading every user's ledger stay ADMIN-only
     Permission.PAYOUT_MANAGE,
     Permission.FINANCIAL_AUDIT_READ,
+    Permission.AUTH_KEYS_MANAGE,
   ]),
   // Automated callers act on platform data, never as a manager
   [Role.SERVICE]: new Set([
@@ -108,6 +111,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, ReadonlySet<Permission>>> =
     Permission.SCORE_CALCULATE,
     Permission.FINANCIAL_RECONCILE,
     Permission.SYSTEM_HEALTH_READ,
+    Permission.AUTH_KEYS_MANAGE,
   ]),
 };
 

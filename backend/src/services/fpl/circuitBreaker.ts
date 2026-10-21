@@ -32,6 +32,10 @@ export interface CircuitBreakerOptions {
   baseBackoffMs?: number;
   maxBackoffMs?: number;
   onStateChange?: (from: CircuitState, to: CircuitState) => void;
+  /** Sliding-window error ratio used when set; takes precedence over failureThreshold. */
+  failureRateThreshold?: number;
+  rollingWindowMs?: number;
+  minimumSamples?: number;
 }
 
 export function calculateDecorrelatedJitter(
@@ -51,6 +55,10 @@ export class CircuitBreaker {
   private halfOpenSuccesses = 0;
   private nextAttemptTime = 0;
   private lastFailureTime: number | null = null;
+  private readonly outcomes: Array<{ at: number; failed: boolean }> = [];
+  private readonly failureRateThreshold?: number;
+  private readonly rollingWindowMs: number;
+  private readonly minimumSamples: number;
 
   public readonly failureThreshold: number;
   public readonly cooldownPeriodMs: number;
@@ -65,6 +73,9 @@ export class CircuitBreaker {
     this.successThreshold = options.successThreshold ?? 1;
     this.baseBackoffMs = options.baseBackoffMs ?? 1000;
     this.maxBackoffMs = options.maxBackoffMs ?? 30000;
+    this.failureRateThreshold = options.failureRateThreshold;
+    this.rollingWindowMs = options.rollingWindowMs ?? 30_000;
+    this.minimumSamples = options.minimumSamples ?? 4;
     this.onStateChange = options.onStateChange;
   }
 
@@ -110,6 +121,7 @@ export class CircuitBreaker {
       this.consecutiveFailures = 0;
       this.halfOpenSuccesses = 0;
       this.nextAttemptTime = 0;
+      this.outcomes.length = 0;
     } else if (newState === CircuitState.HALF_OPEN) {
       this.halfOpenSuccesses = 0;
     } else if (newState === CircuitState.OPEN) {
@@ -121,6 +133,7 @@ export class CircuitBreaker {
   }
 
   public recordSuccess(): void {
+    this.recordOutcome(false);
     if (this.state === CircuitState.HALF_OPEN) {
       this.halfOpenSuccesses++;
       if (this.halfOpenSuccesses >= this.successThreshold) {
@@ -134,12 +147,32 @@ export class CircuitBreaker {
   public recordFailure(error?: unknown): void {
     this.lastFailureTime = Date.now();
     this.consecutiveFailures++;
+    this.recordOutcome(true);
 
     if (this.state === CircuitState.HALF_OPEN) {
       this.transitionTo(CircuitState.OPEN);
-    } else if (this.state === CircuitState.CLOSED && this.consecutiveFailures >= this.failureThreshold) {
+    } else if (this.state === CircuitState.CLOSED && this.shouldOpen()) {
       this.transitionTo(CircuitState.OPEN);
     }
+  }
+
+  private recordOutcome(failed: boolean): void {
+    const now = Date.now();
+    this.outcomes.push({ at: now, failed });
+    while (this.outcomes.length > 0 && this.outcomes[0].at <= now - this.rollingWindowMs) {
+      this.outcomes.shift();
+    }
+  }
+
+  private shouldOpen(): boolean {
+    if (this.failureRateThreshold === undefined) return this.consecutiveFailures >= this.failureThreshold;
+    const now = Date.now();
+    while (this.outcomes.length > 0 && this.outcomes[0].at <= now - this.rollingWindowMs) {
+      this.outcomes.shift();
+    }
+    if (this.outcomes.length < this.minimumSamples) return false;
+    const failures = this.outcomes.reduce((count, outcome) => count + Number(outcome.failed), 0);
+    return failures / this.outcomes.length > this.failureRateThreshold;
   }
 
   public trip(): void {

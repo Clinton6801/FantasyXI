@@ -15,10 +15,22 @@ import {
   CircuitBreaker,
   CircuitBreakerOptions,
   CircuitBreakerOpenError,
+  CircuitState,
   calculateDecorrelatedJitter,
 } from "./circuitBreaker.js";
 
 const FPL_BASE_URL = "https://fantasy.premierleague.com/api";
+
+function createDefaultFplCircuitBreaker(): CircuitBreaker {
+  return new CircuitBreaker({
+    failureRateThreshold: 0.5,
+    rollingWindowMs: 30_000,
+    minimumSamples: 4,
+    onStateChange: (from, to) => {
+      if (to === CircuitState.OPEN) console.warn(`[FplClient] Circuit breaker transitioned ${from} -> ${to}`);
+    },
+  });
+}
 
 /**
  * Cache TTLs for FPL endpoints (issue #139).
@@ -69,13 +81,15 @@ export class FplClient {
         baseUrlOrOptions.defaultTtlSeconds || FPL_CACHE_TTL.DEFAULT_SECONDS;
       this.circuitBreaker =
         baseUrlOrOptions.circuitBreaker ||
-        new CircuitBreaker(baseUrlOrOptions.circuitBreakerOptions);
+        (baseUrlOrOptions.circuitBreakerOptions
+          ? new CircuitBreaker(baseUrlOrOptions.circuitBreakerOptions)
+          : createDefaultFplCircuitBreaker());
     } else {
       this.baseUrl = baseUrlOrOptions || FPL_BASE_URL;
       this.redis = redisClient !== undefined ? redisClient : getRedisClient();
       this.keyPrefix = "fpl:cache:";
       this.defaultTtlSeconds = FPL_CACHE_TTL.DEFAULT_SECONDS;
-      this.circuitBreaker = new CircuitBreaker();
+      this.circuitBreaker = createDefaultFplCircuitBreaker();
     }
   }
 
@@ -379,6 +393,7 @@ export class FplClient {
         yellow_cards: number;
         red_cards: number;
         saves: number;
+        bps: number;
         bonus: number;
         total_points: number;
       };

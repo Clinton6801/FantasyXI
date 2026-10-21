@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import apiV1Router from "./routes/index.js";
 import { apiRateLimiter } from "./middleware/rateLimiter.js";
 import { errorHandler } from "./middleware/error.middleware.js";
+import { getJwks } from "./controllers/auth.controller.js";
 
 import { requestReadConsistency } from "./middleware/readConsistency.js";
 
@@ -41,6 +42,9 @@ app.get("/api/health", (_req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// Public JWK Set for access-token verification (issue #332)
+app.get("/.well-known/jwks.json", getJwks);
 
 // API v1 Routes
 app.use("/api/v1", apiV1Router);

@@ -492,7 +492,8 @@ export async function acceptLeagueInvitation(
 
 /**
  * GET /api/v1/leagues/:id/live — Server-Sent Events stream of live matchday snapshots.
- * Pushes a snapshot on connect and every LIVE_FEED_INTERVAL_MS (default 15s).
+ * Pushes a snapshot on connect and every second by default. The interval is
+ * capped at 1.5s to keep provisional bonus updates within the 2s target.
  */
 export async function streamLeagueLive(
   req: Request,
@@ -523,7 +524,8 @@ export async function streamLeagueLive(
     };
     send("snapshot", first);
 
-    const intervalMs = Number(process.env.LIVE_FEED_INTERVAL_MS) || 15_000;
+    const requestedIntervalMs = Number(process.env.LIVE_FEED_INTERVAL_MS) || 1_000;
+    const intervalMs = Math.min(Math.max(requestedIntervalMs, 250), 1_500);
     const timer = setInterval(async () => {
       try {
         const snapshot = await liveService.getLeagueSnapshot(leagueId);
