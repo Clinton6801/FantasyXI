@@ -7,7 +7,12 @@ import { useAuth } from "@/context/AuthContext";
 import { api, ApiError } from "@/lib/api";
 import { computeDeviceFingerprint } from "@/lib/deviceFingerprint";
 import { describeGoogleAuthError, redirectToGoogleSignIn, safeReturnTo } from "@/lib/googleAuth";
-import { IconFootball, IconGoogle, IconAlertCircle, IconCheck } from "@/components/ui/Icons";
+import {
+  describePasskeyError,
+  usePasskeySupport,
+  type PublicKeyCredentialRequestOptionsJSON,
+} from "@/lib/passkeys";
+import { IconFootball, IconGoogle, IconAlertCircle, IconCheck, IconShield } from "@/components/ui/Icons";
 import { Button } from "@/components/ui/Button";
 
 interface SignedInUser {
@@ -18,13 +23,17 @@ interface SignedInUser {
   createdAt: string;
 }
 
-/** Login answer: a session, or a step-up challenge for an unrecognized device (issue #331). */
+/**
+ * Login answer: a session, a step-up code for an unrecognized device (issue #331),
+ * or a passkey confirmation for an account protected by a passkey (issue #273).
+ */
 type LoginResponse = {
   success: boolean;
   message: string;
   data:
     | { token: string; user: SignedInUser }
-    | { challengeRequired: true; challengeId: string; method: "EMAIL_OTP"; expiresAt: string };
+    | { challengeRequired: true; challengeId: string; method: "EMAIL_OTP"; expiresAt: string }
+    | { challengeRequired: true; method: "WEBAUTHN"; options: PublicKeyCredentialRequestOptionsJSON; expiresAt: string };
 };
 
 function describeError(err: unknown, fallback: string): string {
@@ -36,7 +45,7 @@ function describeError(err: unknown, fallback: string): string {
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { login, isAuthenticated } = useAuth();
+  const { login, loginWithPasskey, isAuthenticated } = useAuth();
 
   const returnTo = safeReturnTo(searchParams.get("returnTo"));
   const urlError = searchParams.get("error");
@@ -48,6 +57,8 @@ function LoginForm() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [code, setCode] = useState("");
+  const [passkeyOptions, setPasskeyOptions] = useState<PublicKeyCredentialRequestOptionsJSON | null>(null);
+  const canUsePasskey = usePasskeySupport();
 
   // If already authenticated, redirect immediately
   useEffect(() => {
@@ -76,8 +87,12 @@ function LoginForm() {
 
       const data = response?.data;
       if (data && "challengeRequired" in data) {
-        setChallengeId(data.challengeId);
-        setCode("");
+        if (data.method === "WEBAUTHN") {
+          setPasskeyOptions(data.options);
+        } else {
+          setChallengeId(data.challengeId);
+          setCode("");
+        }
       } else if (data?.token && data.user) {
         login(data.token, data.user);
         router.push(returnTo);
@@ -113,6 +128,24 @@ function LoginForm() {
       // An expired or exhausted challenge cannot be retried: start over
       if (err instanceof ApiError && /sign in again/i.test(err.message)) {
         setChallengeId(null);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  /** Usernameless passkey sign-in, or the passkey step-up after a password (`stepUpOptions`). */
+  const handlePasskeySignIn = async (stepUpOptions?: PublicKeyCredentialRequestOptionsJSON) => {
+    setErrorMsg(null);
+    setIsSubmitting(true);
+    try {
+      await loginWithPasskey(stepUpOptions);
+      router.push(returnTo);
+    } catch (err: unknown) {
+      setErrorMsg(describePasskeyError(err, "Passkey sign-in failed."));
+      // The server consumed this single-use challenge: the password step must be repeated
+      if (stepUpOptions && err instanceof ApiError) {
+        setPasskeyOptions(null);
       }
     } finally {
       setIsSubmitting(false);
@@ -198,8 +231,48 @@ function LoginForm() {
               Back to sign in
             </button>
           </form>
+        ) : passkeyOptions ? (
+          <div className="space-y-4" data-testid="login-passkey-challenge">
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Your account is protected with a passkey. Confirm it&apos;s you with Face ID, Touch ID, Windows
+              Hello or your security key to finish signing in.
+            </p>
+            <Button
+              type="button"
+              variant="primary"
+              size="lg"
+              className="w-full justify-center text-sm font-bold tracking-wide uppercase"
+              isLoading={isSubmitting}
+              onClick={() => handlePasskeySignIn(passkeyOptions)}
+            >
+              Verify with Passkey
+            </Button>
+            <button
+              type="button"
+              onClick={() => {
+                setPasskeyOptions(null);
+                setErrorMsg(null);
+              }}
+              className="w-full text-xs text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              Back to sign in
+            </button>
+          </div>
         ) : (
           <>
+            {/* Passkey sign-in (usernameless, issue #273) */}
+            {canUsePasskey && (
+              <button
+                type="button"
+                onClick={() => handlePasskeySignIn()}
+                disabled={isSubmitting}
+                className="w-full flex items-center justify-center gap-3 px-4 py-3 mb-3 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-100 font-medium text-sm transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500/50 shadow-sm group disabled:opacity-60"
+              >
+                <IconShield className="w-5 h-5 flex-shrink-0 text-emerald-400 group-hover:scale-105 transition-transform" />
+                <span>Sign in with a passkey</span>
+              </button>
+            )}
+
             {/* Google OAuth Button */}
             <button
               type="button"

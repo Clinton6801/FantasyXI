@@ -30,6 +30,7 @@ import {
 } from "./services/financial/transactionCoordinatorService.js";
 import { financialService } from "./services/financial/financialService.js";
 import { jwtKeyRotationService } from "./services/auth/jwtKeyRotationService.js";
+import { fplClient } from "./services/fpl/fplClient.js";
 
 dotenv.config();
 
@@ -104,6 +105,20 @@ app.get(
         appRegion: process.env.APP_REGION ?? null,
         replicas,
       },
+      timestamp: new Date().toISOString(),
+    });
+  }
+);
+
+// FPL upstream circuit breaker and cache-tier metrics (issue #275), like queue health
+app.get(
+  "/api/health/fpl",
+  requireAuth,
+  requirePermission(Permission.SYSTEM_HEALTH_READ),
+  (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      data: { degraded: fplClient.isDegraded(), ...fplClient.getTelemetry() },
       timestamp: new Date().toISOString(),
     });
   }

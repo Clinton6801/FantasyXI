@@ -12,6 +12,12 @@ import {
   setPassword,
   getUserReferralCode,
   revokeSigningKey,
+  getPasskeyRegistrationOptions,
+  verifyPasskeyRegistration,
+  getPasskeyLoginOptions,
+  verifyPasskeyLogin,
+  listPasskeys,
+  deletePasskey,
 } from "../controllers/auth.controller.js";
 import { requireAuth, requirePermission } from "../middleware/authMiddleware.js";
 import { Permission } from "../types/index.js";
@@ -60,6 +66,31 @@ router.delete("/google/link", requireAuth, unlinkGoogleAccount);
 
 // POST /api/v1/auth/password (Protected: add a password to a Google account, or change it)
 router.post("/password", authRateLimiter, requireAuth, setPassword);
+
+// ============================================================
+// WebAuthn / Passkeys (issue #273)
+// ============================================================
+
+// POST /api/v1/auth/webauthn/login/options (usernameless passkey sign-in)
+router.post("/webauthn/login/options", authRateLimiter, getPasskeyLoginOptions);
+
+// POST /api/v1/auth/webauthn/login/verify (passwordless sign-in, or the step-up after a password)
+router.post("/webauthn/login/verify", authRateLimiter, verifyPasskeyLogin);
+
+// Passkey management for the signed-in account
+const passkeyOwner = [requireAuth, authenticatedRateLimiter, requirePermission(Permission.PROFILE_UPDATE_OWN)];
+
+// POST /api/v1/auth/webauthn/register/options (Protected)
+router.post("/webauthn/register/options", ...passkeyOwner, getPasskeyRegistrationOptions);
+
+// POST /api/v1/auth/webauthn/register/verify (Protected)
+router.post("/webauthn/register/verify", ...passkeyOwner, verifyPasskeyRegistration);
+
+// GET /api/v1/auth/webauthn/credentials (Protected)
+router.get("/webauthn/credentials", ...passkeyOwner, listPasskeys);
+
+// DELETE /api/v1/auth/webauthn/credentials/:credentialId (Protected)
+router.delete("/webauthn/credentials/:credentialId", ...passkeyOwner, deletePasskey);
 
 // POST /api/v1/auth/keys/:kid/revoke (ADMIN or service key: revokes a JWT signing key on every node)
 router.post("/keys/:kid/revoke", requireAuth, requirePermission(Permission.AUTH_KEYS_MANAGE), revokeSigningKey);
