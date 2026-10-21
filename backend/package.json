@@ -33,7 +33,8 @@
     "test:testnet": "tsx --test src/tests/testnetEndToEnd.test.ts",
     "test:resilience": "tsx --test src/tests/sorobanContractClient.test.ts src/tests/financialChaos.test.ts src/tests/fanoutBackpressure.test.ts src/tests/primaryReadGuard.test.ts src/tests/readReplicaRouting.test.ts",
     "test:resilience:integration": "tsx --test src/tests/integration/financialChaos.integration.test.ts src/tests/integration/eventFanout.integration.test.ts src/tests/integration/readReplicaConsistency.integration.test.ts",
-    "test:fanout:load": "tsx src/scripts/loadEventFanout.ts"
+    "test:fanout:load": "tsx src/scripts/loadEventFanout.ts",
+    "test:chaos": "tsx --test src/tests/chaos/postgresConnectionChaos.test.ts"
   },
   "keywords": [],
   "author": "",
