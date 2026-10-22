@@ -1,3 +1,6 @@
+import { eventFanout } from "./services/live/eventFanout.js";
+import { attachLiveSocketServer, LIVE_SOCKET_PATH } from "./realtime/liveSocketServer.js";
+import { initRedisChat } from "./services/chat/chatService.js";
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -11,11 +14,12 @@ import { ApolloServer } from "@apollo/server";
 import { expressMiddleware } from "@as-integrations/express5";
 import DataLoader from "dataloader";
 import { prisma, getReadReplicaStatus } from "./config/db.js";
-import { closeRedisClient } from "./config/redis.js";
+import { closeRedisClient, getRedisClient } from "./config/redis.js";
 import { preferReplicaReads } from "./middleware/readConsistency.js";
 import { financialAuditLog } from "./services/audit/financialAuditLog.js";
 import { resolvers } from "./graphql/resolvers.js";
 import { typeDefs } from "./graphql/schema.js";
+import { createComplexityPlugin } from "./graphql/complexityPlugin.js";
 import { attachChatSocketServer } from "./realtime/chatSocketServer.js";
 import {
   attachNotificationSocketServer,
@@ -26,10 +30,16 @@ import {
   CoordinatedTransactionStatus,
 } from "./services/financial/transactionCoordinatorService.js";
 import { financialService } from "./services/financial/financialService.js";
+import { jwtKeyRotationService } from "./services/auth/jwtKeyRotationService.js";
+import { fplClient } from "./services/fpl/fplClient.js";
 
 dotenv.config();
 
-const apolloServer = new ApolloServer({ typeDefs, resolvers });
+const apolloServer = new ApolloServer({
+  typeDefs,
+  resolvers,
+  plugins: [createComplexityPlugin(getRedisClient())],
+});
 
 // Trust reverse proxies (Cloudflare, Nginx, ALB) for accurate client IP rate limiting
 app.set("trust proxy", 1);
@@ -105,6 +115,20 @@ app.get(
   }
 );
 
+// FPL upstream circuit breaker and cache-tier metrics (issue #275), like queue health
+app.get(
+  "/api/health/fpl",
+  requireAuth,
+  requirePermission(Permission.SYSTEM_HEALTH_READ),
+  (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      data: { degraded: fplClient.isDegraded(), ...fplClient.getTelemetry() },
+      timestamp: new Date().toISOString(),
+    });
+  }
+);
+
 // ============================================================
 // Global error handler
 // ============================================================
@@ -135,7 +159,12 @@ function startTransactionCoordinator(): void {
   }
 }
 
+let liveSocketServer: ReturnType<typeof attachLiveSocketServer> | null = null;
+let chatAdapter: Awaited<ReturnType<typeof initRedisChat>> = null;
+
 async function startServer(): Promise<void> {
+  await eventFanout.start();
+  chatAdapter = await initRedisChat();
   await apolloServer.start();
   app.use(
     "/graphql",
@@ -185,8 +214,9 @@ async function startServer(): Promise<void> {
   });
 
   // Real-time league chat and user notifications share the HTTP server's port
-  chatSocketServer = attachChatSocketServer(httpServer, { passthroughPaths: [NOTIFICATION_SOCKET_PATH] });
+  chatSocketServer = attachChatSocketServer(httpServer, { passthroughPaths: [NOTIFICATION_SOCKET_PATH, LIVE_SOCKET_PATH] });
   notificationSocketServer = attachNotificationSocketServer(httpServer);
+  liveSocketServer = attachLiveSocketServer(httpServer);
   startTransactionCoordinator();
 }
 
@@ -199,9 +229,13 @@ process.on("SIGTERM", () => {
   // Persist buffered financial audit entries before exiting
   stopJobQueue()
     .finally(() => transactionCoordinator.stop())
+    .finally(() => jwtKeyRotationService.stop())
     .finally(() => chatSocketServer?.close())
     .finally(() => notificationSocketServer?.close())
     .finally(() => financialAuditLog.close())
+    .finally(() => liveSocketServer?.close())
+    .finally(() => chatAdapter?.close())
+    .finally(() => eventFanout.close())
     .finally(() => closeRedisClient())
     .finally(() => process.exit(0));
 });

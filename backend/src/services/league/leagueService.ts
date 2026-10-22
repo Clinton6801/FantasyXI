@@ -37,6 +37,10 @@ export interface H2HAnomalyReport {
 
 export const MAX_LEAGUE_MEMBERS = 100_000;
 
+/** Maximum lengths (after trimming) accepted when creating a league. */
+export const LEAGUE_NAME_MAX_LENGTH = 50;
+export const LEAGUE_DESCRIPTION_MAX_LENGTH = 200;
+
 export class LeagueValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -407,11 +411,23 @@ export class LeagueService {
    * Creates a new fantasy league and registers the creator as the first pending member.
    */
   public async createLeague(userId: string, input: CreateLeagueInput) {
-    if (!input.name || input.name.trim().length === 0) {
+    if (typeof input.name !== "string" || input.name.trim().length === 0) {
       throw new LeagueValidationError("League name is required");
     }
-    if (input.name.trim().length > 60) {
-      throw new LeagueValidationError("League name must not exceed 60 characters");
+    if (input.name.trim().length > LEAGUE_NAME_MAX_LENGTH) {
+      throw new LeagueValidationError(
+        `League name must not exceed ${LEAGUE_NAME_MAX_LENGTH} characters`
+      );
+    }
+    if (input.description !== undefined && input.description !== null) {
+      if (typeof input.description !== "string") {
+        throw new LeagueValidationError("League description must be a string");
+      }
+      if (input.description.trim().length > LEAGUE_DESCRIPTION_MAX_LENGTH) {
+        throw new LeagueValidationError(
+          `League description must not exceed ${LEAGUE_DESCRIPTION_MAX_LENGTH} characters`
+        );
+      }
     }
     if (input.entryFee < 0) {
       throw new LeagueValidationError("Entry fee must be 0 or greater");
@@ -424,6 +440,18 @@ export class LeagueService {
 
     if (input.isPrivate !== undefined && typeof input.isPrivate !== "boolean") {
       throw new LeagueValidationError("isPrivate must be a boolean");
+    }
+
+    const payoutPreset = input.payoutPreset ?? "standard";
+    if (!["standard", "winner-takes-all", "top-five", "custom"].includes(payoutPreset)) {
+      throw new LeagueValidationError("Invalid payout preset");
+    }
+    if (payoutPreset === "custom") {
+      try {
+        PrizeService.validateSplits(input.customPrizeSplitsBps ?? []);
+      } catch (error) {
+        throw new LeagueValidationError(error instanceof Error ? error.message : "Invalid custom prize splits");
+      }
     }
 
     const maxMembers = input.maxMembers ?? 20;
@@ -508,6 +536,8 @@ export class LeagueService {
           prizePool: prizeCalc.prizePool,
           status: LeagueStatus.UPCOMING,
           scoringType,
+          payoutPreset,
+          payoutSplitsBps: payoutPreset === "custom" ? input.customPrizeSplitsBps : [],
           isPrivate: input.isPrivate ?? false,
           startGameweekId: startGw.id,
           endGameweekId: endGw.id,

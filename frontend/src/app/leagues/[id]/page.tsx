@@ -372,10 +372,10 @@ export default function LeagueDetailPage({
             <div className="flex items-center gap-2 mb-1.5">
               <LeagueStatusBadge status={league.status} />
               {league.isPrivate && (
-                <Badge variant="neutral" className="gap-1">
+                <span className="inline-flex items-center gap-1 text-xs text-slate-400">
                   <IconShield className="w-3 h-3" />
                   <span>Private</span>
-                </Badge>
+                </span>
               )}
               <span className="text-xs font-mono text-slate-400">
                 GW {league.startGameweekId} &rarr; GW {league.endGameweekId}
@@ -671,7 +671,11 @@ export default function LeagueDetailPage({
 
       {/* Live squad points */}
       {liveSquadEntry && (
-        <LiveSquadModal entry={liveSquadEntry} onClose={() => setLiveSquadUserId(null)} />
+        <LiveSquadModal
+          entry={liveSquadEntry}
+          events={snapshot?.events}
+          onClose={() => setLiveSquadUserId(null)}
+        />
       )}
 
       {/* USDC Payment Modal */}

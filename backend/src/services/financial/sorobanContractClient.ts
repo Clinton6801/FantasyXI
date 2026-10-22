@@ -31,8 +31,9 @@ import {
   scValToNative,
   StrKey,
   xdr,
-  type Transaction,
+  Transaction,
 } from "@stellar/stellar-sdk";
+import { PrizeService } from "../league/prizeService.js";
 import {
   LocalSecretTransactionSigner,
   type StellarTransactionSigner,
@@ -91,6 +92,7 @@ export interface InvocationResult {
   contractErrorCode?: number;
   humanError?: string;
   isRetryable?: boolean;
+  uncertain?: boolean;
 }
 
 export type DepositSimulationResult =
@@ -202,9 +204,9 @@ export class SorobanContractClient {
   /**
    * Submits a signed transaction and polls until it is final.
    */
-  private async sendAndPoll(tx: Transaction): Promise<InvocationResult> {
+  private async sendAndPoll(tx: StellarTransaction, beforeSubmit?: (hash: string, envelope: string) => Promise<void>): Promise<InvocationResult> {
     let submitted: StellarTransaction = tx;
-    if (this.feeBumpFeeSource) {
+    if (this.feeBumpFeeSource && tx instanceof Transaction) {
       const feeBump = TransactionBuilder.buildFeeBumpTransaction(
         await this.signer.publicKey(this.feeBumpFeeSource),
         Math.max(Number(BASE_FEE), Number(tx.fee)).toString(),
@@ -214,34 +216,42 @@ export class SorobanContractClient {
       await this.signer.sign(feeBump, this.feeBumpFeeSource);
       submitted = feeBump;
     }
-    const sent = await this.server.sendTransaction(submitted);
-    if (sent.status === "ERROR" || sent.status === "DUPLICATE") {
-      return this.failure(
-        `Transaction rejected (${sent.status}): ${sent.errorResult?.toXDR("base64") ?? "unknown"}`,
-        sent.hash
-      );
-    }
-
-    for (let attempt = 0; attempt < this.maxPollAttempts; attempt++) {
-      const result = await this.server.getTransaction(sent.hash);
-      if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-        return {
-          success: true,
-          txHash: sent.hash,
-          ledgerSeq: result.ledger,
-          returnValue: result.returnValue ? scValToNative(result.returnValue) : undefined,
-        };
-      }
-      if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
+    const hash = Buffer.from(submitted.hash()).toString("hex");
+    // Persist the exact signed hash before any bytes can reach the RPC server.
+    // A journal failure prevents submission; a response loss must never rebuild a new tx.
+    await beforeSubmit?.(hash, submitted.toXDR());
+    try {
+      const sent = await this.server.sendTransaction(submitted);
+      if (sent.status === "ERROR") {
         return this.failure(
-          `Transaction failed: ${result.resultXdr.toXDR("base64")}`,
-          sent.hash
+          `Transaction rejected (${sent.status}): ${sent.errorResult?.toXDR("base64") ?? "unknown"}`,
+          hash
         );
       }
-      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
-    }
 
-    return this.failure(`Transaction ${sent.hash} not confirmed in time`, sent.hash);
+      for (let attempt = 0; attempt < this.maxPollAttempts; attempt++) {
+        const result = await this.server.getTransaction(hash);
+        if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+          return {
+            success: true,
+            txHash: hash,
+            ledgerSeq: result.ledger,
+            returnValue: result.returnValue ? scValToNative(result.returnValue) : undefined,
+          };
+        }
+        if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
+          return this.failure(
+            `Transaction failed: ${result.resultXdr.toXDR("base64")}`,
+            hash
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
+      }
+
+      return { ...this.failure(`Transaction ${hash} not confirmed in time`, hash), uncertain: true, isRetryable: false };
+    } catch (error) {
+      return { ...this.failure(`Submission outcome unknown: ${(error as Error).message}`, hash), isRetryable: false, uncertain: true };
+    }
   }
 
   /**
@@ -267,11 +277,18 @@ export class SorobanContractClient {
   /**
    * Full RPC pipeline for a state-changing contract call.
    */
+  /** Replay only the durable envelope: its hash/time bounds/sequence remain unchanged. */
+  public async resumeEnvelope(envelope: string): Promise<InvocationResult> {
+    const tx = TransactionBuilder.fromXDR(envelope, this.networkPassphrase);
+    return this.sendAndPoll(tx);
+  }
+
   public async invoke(
     sourceSecret: string,
     contractId: string,
     method: string,
-    args: xdr.ScVal[]
+    args: xdr.ScVal[],
+    beforeSubmit?: (hash: string, envelope: string) => Promise<void>
   ): Promise<InvocationResult> {
     return executeWithRetry(
       async () => {
@@ -301,8 +318,8 @@ export class SorobanContractClient {
 
           const prepared = rpc.assembleTransaction(tx, simulation).build();
           prepared.sign(keypair);
-          const pollRes = await this.sendAndPoll(prepared);
-          if (!pollRes.success && pollRes.isRetryable) {
+          const pollRes = await this.sendAndPoll(prepared, beforeSubmit);
+          if (!pollRes.success && pollRes.isRetryable && !pollRes.txHash) {
             throw new Error(pollRes.error || "Retryable transaction failure");
           }
           return pollRes;
@@ -494,9 +511,23 @@ export class SorobanContractClient {
     leagueId: number | bigint,
     winners: WinnerPayoutParam[],
     platformTreasury: string,
-    platformFeeStroops: bigint
+    platformFeeStroops: bigint,
+    distributionBps?: number[]
+    beforeSubmit?: (hash: string, envelope: string) => Promise<void>
   ): Promise<InvocationResult> {
     const winnersScVal = SorobanContractClient.winnersScVal(winners);
+
+    if (distributionBps) {
+      PrizeService.encodeSorobanDistribution(distributionBps);
+      return this.invoke(adminSecret, this.escrowContractId, "settle_with_distribution", [
+        SorobanContractClient.address(adminPublic),
+        SorobanContractClient.u64(leagueId),
+        winnersScVal,
+        SorobanContractClient.address(platformTreasury),
+        SorobanContractClient.i128(platformFeeStroops),
+        xdr.ScVal.scvVec(distributionBps.map((value) => nativeToScVal(value, { type: "u32" }))),
+      ]);
+    }
 
     return this.invoke(adminSecret, this.escrowContractId, "settle", [
       SorobanContractClient.address(adminPublic),
@@ -504,7 +535,7 @@ export class SorobanContractClient {
       winnersScVal,
       SorobanContractClient.address(platformTreasury),
       SorobanContractClient.i128(platformFeeStroops),
-    ]);
+    ], beforeSubmit);
   }
 
   /** Settles with a required 32-byte commitment to the off-chain calculation. */
@@ -668,6 +699,20 @@ export class SorobanContractClient {
     ]);
   }
 
+  /** Refund a single verified deposit without cancelling the rest of its league. */
+  public async refundDeposit(
+    adminSecret: string,
+    adminPublic: string,
+    leagueId: number | bigint,
+    participant: string
+  ): Promise<InvocationResult> {
+    return this.invoke(adminSecret, this.escrowContractId, "refund_deposit", [
+      SorobanContractClient.address(adminPublic),
+      SorobanContractClient.u64(leagueId),
+      SorobanContractClient.address(participant),
+    ]);
+  }
+
   /**
    * Query on-chain league state.
    */
@@ -715,5 +760,275 @@ export class SorobanContractClient {
       SorobanContractClient.address(addressOrContractId),
     ]);
     return result.success ? BigInt((result.returnValue as bigint) ?? 0) : 0n;
+  }
+
+  /**
+   * Settle a league with a Merkle root commitment for scaling to large participant counts.
+   */
+  public async settleWithMerkleRoot(
+    adminSecret: string,
+    adminPublic: string,
+    leagueId: number | bigint,
+    merkleRoot: string,
+    totalPrizeStroops: bigint,
+    platformTreasury: string,
+    platformFeeStroops: bigint,
+    beforeSubmit?: (hash: string, envelope: string) => Promise<void>
+  ): Promise<InvocationResult> {
+    if (!/^[0-9a-f]{64}$/i.test(merkleRoot)) {
+      return this.failure("Merkle root must be a 32-byte hexadecimal hash");
+    }
+    return this.invoke(
+      adminSecret,
+      this.escrowContractId,
+      "settle_with_merkle_root",
+      [
+        SorobanContractClient.address(adminPublic),
+        SorobanContractClient.u64(leagueId),
+        nativeToScVal(Buffer.from(merkleRoot, "hex"), { type: "bytes" }),
+        SorobanContractClient.i128(totalPrizeStroops),
+        SorobanContractClient.address(platformTreasury),
+        SorobanContractClient.i128(platformFeeStroops),
+      ],
+      beforeSubmit
+    );
+  }
+
+  /**
+   * Claim individual prize using a Merkle tree proof.
+   */
+  public async claimPrizeMerkle(
+    claimantSecret: string,
+    claimantPublic: string,
+    leagueId: number | bigint,
+    amountStroops: bigint,
+    proof: string[],
+    beforeSubmit?: (hash: string, envelope: string) => Promise<void>
+  ): Promise<InvocationResult> {
+    for (const p of proof) {
+      if (!/^[0-9a-f]{64}$/i.test(p)) {
+        return this.failure("All proof elements must be 32-byte hexadecimal hashes");
+      }
+    }
+    const proofScVal = xdr.ScVal.scvVec(
+      proof.map((p) => nativeToScVal(Buffer.from(p, "hex"), { type: "bytes" }))
+    );
+    return this.invoke(
+      claimantSecret,
+      this.escrowContractId,
+      "claim_prize_merkle",
+      [
+        SorobanContractClient.address(claimantPublic),
+        SorobanContractClient.u64(leagueId),
+        SorobanContractClient.i128(amountStroops),
+        proofScVal,
+      ],
+      beforeSubmit
+    );
+  }
+
+  /**
+   * Query the stored on-chain Merkle root for a settled league.
+   */
+  public async getMerkleRoot(leagueId: number | bigint): Promise<string | null> {
+    const result = await this.simulateView(this.escrowContractId, "get_merkle_root", [
+      SorobanContractClient.u64(leagueId),
+    ]);
+    if (!result.success || !result.returnValue) {
+      return null;
+    }
+    if (Buffer.isBuffer(result.returnValue)) {
+      return result.returnValue.toString("hex");
+    }
+    if (result.returnValue instanceof Uint8Array) {
+      return Buffer.from(result.returnValue).toString("hex");
+    }
+    return String(result.returnValue);
+  }
+
+  /**
+   * Check if a claimant has already claimed their prize in a league.
+   */
+  public async isPrizeClaimed(
+    leagueId: number | bigint,
+    claimantAddress: string
+  ): Promise<boolean> {
+    const result = await this.simulateView(this.escrowContractId, "is_prize_claimed", [
+      SorobanContractClient.u64(leagueId),
+      SorobanContractClient.address(claimantAddress),
+    ]);
+    return result.success ? Boolean(result.returnValue) : false;
+  }
+
+  /**
+   * Emergency freeze a league during a dispute to halt settlements, claims, and refunds.
+   */
+  public async freezeLeague(
+    adminSecret: string,
+    adminPublic: string,
+    leagueId: number | bigint,
+    reasonHash: string
+  ): Promise<InvocationResult> {
+    if (!/^[0-9a-f]{64}$/i.test(reasonHash)) {
+      return this.failure("Dispute reason hash must be a 32-byte hexadecimal hash");
+    }
+    return this.invoke(adminSecret, this.escrowContractId, "freeze_league", [
+      SorobanContractClient.address(adminPublic),
+      SorobanContractClient.u64(leagueId),
+      nativeToScVal(Buffer.from(reasonHash, "hex"), { type: "bytes" }),
+    ]);
+  }
+
+  /**
+   * Unfreeze a league after a dispute review or rejection.
+   */
+  public async unfreezeLeague(
+    adminSecret: string,
+    adminPublic: string,
+    leagueId: number | bigint
+  ): Promise<InvocationResult> {
+    return this.invoke(adminSecret, this.escrowContractId, "unfreeze_league", [
+      SorobanContractClient.address(adminPublic),
+      SorobanContractClient.u64(leagueId),
+    ]);
+  }
+
+  /**
+   * Check if a league is currently frozen under dispute.
+   */
+  public async isLeagueFrozen(leagueId: number | bigint): Promise<boolean> {
+    const result = await this.simulateView(this.escrowContractId, "is_league_frozen", [
+      SorobanContractClient.u64(leagueId),
+    ]);
+    return result.success ? Boolean(result.returnValue) : false;
+  }
+
+  /**
+   * Resolve a dispute by executing payout settlements to winners.
+   */
+  public async resolveDisputePayout(
+    adminSecret: string,
+    adminPublic: string,
+    leagueId: number | bigint,
+    winners: WinnerPayoutParam[],
+    platformTreasury: string,
+    platformFeeStroops: bigint
+  ): Promise<InvocationResult> {
+    const winnersScVal = SorobanContractClient.winnersScVal(winners);
+    return this.invoke(adminSecret, this.escrowContractId, "resolve_dispute_payout", [
+      SorobanContractClient.address(adminPublic),
+      SorobanContractClient.u64(leagueId),
+      winnersScVal,
+      SorobanContractClient.address(platformTreasury),
+      SorobanContractClient.i128(platformFeeStroops),
+    ]);
+  }
+
+  /**
+   * Resolve a dispute by refunding all participants.
+   */
+  public async resolveDisputeRefund(
+    adminSecret: string,
+    adminPublic: string,
+    leagueId: number | bigint,
+    participants: string[]
+  ): Promise<InvocationResult> {
+    return this.invoke(adminSecret, this.escrowContractId, "resolve_dispute_refund", [
+      SorobanContractClient.address(adminPublic),
+      SorobanContractClient.u64(leagueId),
+      xdr.ScVal.scvVec(participants.map((p) => SorobanContractClient.address(p))),
+    ]);
+  }
+
+  /**
+   * Inspect TTL expiration for contract instance.
+   */
+  public async getContractInstanceTtl(): Promise<{
+    liveUntilLedgerSeq: number;
+    remainingLedgers: number;
+    currentLedgerSeq: number;
+  } | null> {
+    try {
+      const contractScAddress = new Address(this.escrowContractId).toScAddress();
+      const instanceKey = xdr.LedgerKey.contractData(
+        new xdr.LedgerKeyContractData({
+          contract: contractScAddress,
+          key: xdr.ScVal.scvLedgerKeyContractInstance(),
+          durability: xdr.ContractDataDurability.persistent(),
+        })
+      );
+      const [res, latest] = await Promise.all([
+        this.server.getLedgerEntries(instanceKey),
+        this.server.getLatestLedger(),
+      ]);
+      const entry = res.entries?.[0];
+      if (!entry || entry.liveUntilLedgerSeq === undefined) {
+        return null;
+      }
+      return {
+        liveUntilLedgerSeq: entry.liveUntilLedgerSeq,
+        remainingLedgers: entry.liveUntilLedgerSeq - latest.sequence,
+        currentLedgerSeq: latest.sequence,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Inspect TTL expiration for a specific league entry.
+   */
+  public async getLeagueEntryTtl(
+    leagueId: number | bigint
+  ): Promise<{
+    liveUntilLedgerSeq: number;
+    remainingLedgers: number;
+    currentLedgerSeq: number;
+  } | null> {
+    try {
+      const contractScAddress = new Address(this.escrowContractId).toScAddress();
+      const leagueKey = xdr.LedgerKey.contractData(
+        new xdr.LedgerKeyContractData({
+          contract: contractScAddress,
+          key: xdr.ScVal.scvVec([
+            xdr.ScVal.scvSymbol("League"),
+            SorobanContractClient.u64(leagueId),
+          ]),
+          durability: xdr.ContractDataDurability.persistent(),
+        })
+      );
+      const [res, latest] = await Promise.all([
+        this.server.getLedgerEntries(leagueKey),
+        this.server.getLatestLedger(),
+      ]);
+      const entry = res.entries?.[0];
+      if (!entry || entry.liveUntilLedgerSeq === undefined) {
+        return null;
+      }
+      return {
+        liveUntilLedgerSeq: entry.liveUntilLedgerSeq,
+        remainingLedgers: entry.liveUntilLedgerSeq - latest.sequence,
+        currentLedgerSeq: latest.sequence,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Extend contract instance TTL and league TTL on-chain.
+   * Default threshold: 14 days (241,920 ledgers), extend_to: 30 days (518,400 ledgers).
+   */
+  public async extendLeagueTtl(
+    adminSecret: string,
+    leagueId: number | bigint,
+    thresholdLedgers: number = 241920,
+    extendToLedgers: number = 518400
+  ): Promise<InvocationResult> {
+    return this.invoke(adminSecret, this.escrowContractId, "extend_league_ttl", [
+      SorobanContractClient.u64(leagueId),
+      nativeToScVal(thresholdLedgers, { type: "u32" }),
+      nativeToScVal(extendToLedgers, { type: "u32" }),
+    ]);
   }
 }
